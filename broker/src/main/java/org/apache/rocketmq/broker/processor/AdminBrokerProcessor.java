@@ -67,18 +67,7 @@ import org.apache.rocketmq.broker.metrics.InvocationStatus;
 import org.apache.rocketmq.broker.plugin.BrokerAttachedPlugin;
 import org.apache.rocketmq.broker.subscription.SubscriptionGroupManager;
 import org.apache.rocketmq.broker.transaction.queue.TransactionalMessageUtil;
-import org.apache.rocketmq.common.BoundaryType;
-import org.apache.rocketmq.common.BrokerConfig;
-import org.apache.rocketmq.common.CheckRocksdbCqWriteResult;
-import org.apache.rocketmq.common.KeyBuilder;
-import org.apache.rocketmq.common.LockCallback;
-import org.apache.rocketmq.common.MQVersion;
-import org.apache.rocketmq.common.MixAll;
-import org.apache.rocketmq.common.Pair;
-import org.apache.rocketmq.common.PlainAccessConfig;
-import org.apache.rocketmq.common.TopicConfig;
-import org.apache.rocketmq.common.UnlockCallback;
-import org.apache.rocketmq.common.UtilAll;
+import org.apache.rocketmq.common.*;
 import org.apache.rocketmq.common.attribute.AttributeParser;
 import org.apache.rocketmq.common.attribute.TopicMessageType;
 import org.apache.rocketmq.common.constant.ConsumeInitMode;
@@ -496,14 +485,14 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
     }
 
     private synchronized RemotingCommand updateAndCreateTopic(ChannelHandlerContext ctx,
-        RemotingCommand request) throws RemotingCommandException {
+                                                              RemotingCommand request) throws RemotingCommandException {
         long startTime = System.currentTimeMillis();
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
         final CreateTopicRequestHeader requestHeader =
-            (CreateTopicRequestHeader) request.decodeCommandCustomHeader(CreateTopicRequestHeader.class);
+                (CreateTopicRequestHeader) request.decodeCommandCustomHeader(CreateTopicRequestHeader.class);
 
         LOGGER.info("Broker receive request to update or create topic={}, caller address={}",
-            requestHeader.getTopic(), RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
+                requestHeader.getTopic(), RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
 
         String topic = requestHeader.getTopic();
 
@@ -533,16 +522,20 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
             String attributesModification = requestHeader.getAttributes();
             topicConfig.setAttributes(AttributeParser.parseToMap(attributesModification));
 
-            if (topicConfig.getTopicMessageType() == TopicMessageType.MIXED
-                && !brokerController.getBrokerConfig().isEnableMixedMessageType()) {
-                response.setCode(ResponseCode.SYSTEM_ERROR);
-                response.setRemark("MIXED message type is not supported.");
-                return response;
+            if (!brokerController.getBrokerConfig().isEnableMixedMessageType() && topicConfig.getAttributes() != null) {
+                // Get attribute by key with prefix sign
+                String msgTypeAttrKey = AttributeParser.ATTR_ADD_PLUS_SIGN + TopicAttributes.TOPIC_MESSAGE_TYPE_ATTRIBUTE.getName();
+                String msgTypeAttrValue = topicConfig.getAttributes().get(msgTypeAttrKey);
+                if (msgTypeAttrValue != null && msgTypeAttrValue.equals(TopicMessageType.MIXED.getValue())) {
+                    response.setCode(ResponseCode.SYSTEM_ERROR);
+                    response.setRemark("MIXED message type is not supported.");
+                    return response;
+                }
             }
 
             if (topicConfig.equals(this.brokerController.getTopicConfigManager().getTopicConfigTable().get(topic))) {
                 LOGGER.info("Broker receive request to update or create topic={}, but topicConfig has  no changes , so idempotent, caller address={}",
-                    requestHeader.getTopic(), RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
+                        requestHeader.getTopic(), RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
                 response.setCode(ResponseCode.SUCCESS);
                 return response;
             }
@@ -559,8 +552,7 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark(e.getMessage());
             return response;
-        }
-        finally {
+        } finally {
             executionTime = System.currentTimeMillis() - startTime;
             InvocationStatus status = response.getCode() == ResponseCode.SUCCESS ?
                     InvocationStatus.SUCCESS : InvocationStatus.FAILURE;
@@ -570,12 +562,12 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
                     .build();
             BrokerMetricsManager.topicCreateExecuteTime.record(executionTime, attributes);
         }
-        LOGGER.info("executionTime of create topic:{} is {} ms" , topic, executionTime);
+        LOGGER.info("executionTime of create topic:{} is {} ms", topic, executionTime);
         return response;
     }
 
     private synchronized RemotingCommand updateAndCreateTopicList(ChannelHandlerContext ctx,
-        RemotingCommand request) throws RemotingCommandException {
+                                                                  RemotingCommand request) throws RemotingCommandException {
         long startTime = System.currentTimeMillis();
 
         final CreateTopicListRequestBody requestBody = CreateTopicListRequestBody.decode(request.getBody(), CreateTopicListRequestBody.class);
@@ -609,15 +601,19 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
                         return response;
                     }
                 }
-                if (topicConfig.getTopicMessageType() == TopicMessageType.MIXED
-                    && !brokerController.getBrokerConfig().isEnableMixedMessageType()) {
-                    response.setCode(ResponseCode.SYSTEM_ERROR);
-                    response.setRemark("MIXED message type is not supported.");
-                    return response;
+                if (!brokerController.getBrokerConfig().isEnableMixedMessageType() && topicConfig.getAttributes() != null) {
+                    // Get attribute by key with prefix sign
+                    String msgTypeAttrKey = AttributeParser.ATTR_ADD_PLUS_SIGN + TopicAttributes.TOPIC_MESSAGE_TYPE_ATTRIBUTE.getName();
+                    String msgTypeAttrValue = topicConfig.getAttributes().get(msgTypeAttrKey);
+                    if (msgTypeAttrValue != null && msgTypeAttrValue.equals(TopicMessageType.MIXED.getValue())) {
+                        response.setCode(ResponseCode.SYSTEM_ERROR);
+                        response.setRemark("MIXED message type is not supported.");
+                        return response;
+                    }
                 }
                 if (topicConfig.equals(this.brokerController.getTopicConfigManager().getTopicConfigTable().get(topic))) {
                     LOGGER.info("Broker receive request to update or create topic={}, but topicConfig has  no changes , so idempotent, caller address={}",
-                        topic, RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
+                            topic, RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
                     response.setCode(ResponseCode.SUCCESS);
                     return response;
                 }
@@ -637,18 +633,17 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark(e.getMessage());
             return response;
-        }
-        finally {
+        } finally {
             executionTime = System.currentTimeMillis() - startTime;
             InvocationStatus status = response.getCode() == ResponseCode.SUCCESS ?
-                InvocationStatus.SUCCESS : InvocationStatus.FAILURE;
+                    InvocationStatus.SUCCESS : InvocationStatus.FAILURE;
             Attributes attributes = BrokerMetricsManager.newAttributesBuilder()
-                .put(LABEL_INVOCATION_STATUS, status.getName())
-                .put(LABEL_IS_SYSTEM, TopicValidator.isSystemTopic(topicNames))
-                .build();
+                    .put(LABEL_INVOCATION_STATUS, status.getName())
+                    .put(LABEL_IS_SYSTEM, TopicValidator.isSystemTopic(topicNames))
+                    .build();
             BrokerMetricsManager.topicCreateExecuteTime.record(executionTime, attributes);
         }
-        LOGGER.info("executionTime of all topics:{} is {} ms" , topicNames, executionTime);
+        LOGGER.info("executionTime of all topics:{} is {} ms", topicNames, executionTime);
         return response;
     }
 
